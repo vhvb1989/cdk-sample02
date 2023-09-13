@@ -1,0 +1,17 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net7.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="$(SDK_REPO_ROOT)\azure-sdk-for-net\sdk\sqlmanagement\Azure.ResourceManager.Sql\src\Azure.ResourceManager.Sql.csproj" />
+    <ProjectReference Include="..\src\Cdk.Core\src\Cdk.Core.csproj" />
+    <ProjectReference Include="$(SDK_REPO_ROOT)\azure-sdk-for-net\sdk\keyvault\Azure.ResourceManager.KeyVault\src\Azure.ResourceManager.KeyVault.csproj" />
+    <ProjectReference Include="$(SDK_REPO_ROOT)\azure-sdk-for-net\sdk\resourcemanager\Azure.ResourceManager\src\Azure.ResourceManager.csproj" />
+  </ItemGroup>
+
+</Project>
