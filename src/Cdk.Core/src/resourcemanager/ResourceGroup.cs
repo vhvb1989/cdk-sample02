@@ -9,14 +9,14 @@ namespace Cdk.ResourceManager
 {
     public class ResourceGroup : Resource<ResourceGroupData>, IModelSerializable<ResourceGroup>
     {
-        public override string Name { get; } = $"rg{Infrastructure.Seed.Replace("-","")}";
+        private const string ResourceTypeName = "Microsoft.Resources/resourceGroups";
 
-        public ResourceGroup(Resource scope, string? name = default, string version = "2023-07-01", AzureLocation? location = default)
-            : base(scope, version, ResourceManagerModelFactory.ResourceGroupData(
-                name: name is null ? $"rg-{Infrastructure.Seed}" : $"{name}-{Infrastructure.Seed}",
-                resourceType: "Microsoft.Resources/resourceGroups",
-                tags: new Dictionary<string,string> {{"azd-env-name",Environment.GetEnvironmentVariable("AZURE_ENV_NAME")}},
-                location: location ?? Environment.GetEnvironmentVariable("AZURE_LOCATION") ?? AzureLocation.WestUS))
+        public ResourceGroup(string? name = default, string version = "2023-07-01", AzureLocation? location = default)
+            : base(Infrastructure.DefaultSubscription, GetName(name), ResourceTypeName, version, ResourceManagerModelFactory.ResourceGroupData(
+                name: GetName(name),
+                resourceType: ResourceTypeName,
+                tags: new Dictionary<string, string> { { "azd-env-name", Environment.GetEnvironmentVariable("AZURE_ENV_NAME") ?? throw new Exception("No environment variable 'AZURE_ENV_NAME' was found") } },
+                location: GetLocation(location)))
         {
         }
 
@@ -37,6 +37,8 @@ namespace Cdk.ResourceManager
                 stream.Write(ModelSerializer.Serialize(resource, "bicep-module"));
             }
 
+            WriteOutputs(stream);
+
             return new BinaryData(stream.GetBuffer().AsMemory(0, (int)stream.Position));
         }
 
@@ -44,5 +46,7 @@ namespace Cdk.ResourceManager
         {
             throw new NotImplementedException();
         }
+
+        private static string GetName(string? name) => name is null ? $"rg-{Infrastructure.Seed}" : $"{name}-{Infrastructure.Seed}";
     }
 }

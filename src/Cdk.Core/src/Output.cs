@@ -4,11 +4,13 @@
     {
         public string Name { get; }
         public string Value { get; }
+        public bool IsLiteral { get; }
 
-        public Output(string name, string value)
+        public Output(string name, string value, bool isLiteral = false)
         {
             Name = name;
             Value = value;
+            IsLiteral = isLiteral;
         }
     }
 }

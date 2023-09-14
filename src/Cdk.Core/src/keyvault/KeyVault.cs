@@ -2,24 +2,25 @@
 using Azure.Core;
 using Azure.ResourceManager.KeyVault;
 using Azure.ResourceManager.KeyVault.Models;
+using Cdk.ResourceManager;
 
 namespace Cdk.KeyVault
 {
     public class KeyVault : Resource<KeyVaultData>
     {
-        public override string Name { get; } = $"kv{Infrastructure.Seed.Replace("-","")}";
+        private const string ResourceTypeName = "Microsoft.KeyVault/vaults";
 
         public KeyVault(Resource scope, string name, string version = "2023-02-01", AzureLocation? location = default)
-            : base(scope, version, ArmKeyVaultModelFactory.KeyVaultData(
-                name: name is null ? $"kv-{Infrastructure.Seed}" : $"{name}-{Infrastructure.Seed}",
-                resourceType: "Microsoft.KeyVault/vaults",
-                location: location ?? Environment.GetEnvironmentVariable("AZURE_LOCATION") ?? AzureLocation.WestUS,
+            : base(scope, GetName(name), ResourceTypeName, version, ArmKeyVaultModelFactory.KeyVaultData(
+                name: GetName(name),
+                resourceType: ResourceTypeName,
+                location: GetLocation(location),
                 properties: ArmKeyVaultModelFactory.KeyVaultProperties(
-                    tenantId: Guid.Parse(Environment.GetEnvironmentVariable("AZURE_TENANT_ID")!),
+                    tenantId: Tenant.Instance.Properties.TenantId!.Value,
                     sku: new KeyVaultSku(KeyVaultSkuFamily.A, KeyVaultSkuName.Standard),
                     accessPolicies: Environment.GetEnvironmentVariable("AZURE_PRINCIPAL_ID") is not null ? new List<KeyVaultAccessPolicy>()
                     {
-                        new KeyVaultAccessPolicy(Guid.Parse(Environment.GetEnvironmentVariable("AZURE_TENANT_ID")!), Environment.GetEnvironmentVariable("AZURE_PRINCIPAL_ID"), new IdentityAccessPermissions()
+                        new KeyVaultAccessPolicy(Tenant.Instance.Properties.TenantId!.Value, Environment.GetEnvironmentVariable("AZURE_PRINCIPAL_ID"), new IdentityAccessPermissions()
                         {
                             Secrets =
                             {
@@ -31,10 +32,14 @@ namespace Cdk.KeyVault
         {
         }
 
-        public void ParameterizeAccessPolicyObjectId(string instance, Parameter parameter)
+        private static string GetName(string? name)
         {
-            ParameterOverrides.Add("objectId", parameter.Name);
-            Parameters.Add(parameter);
+            return name is null ? $"kv-{Infrastructure.Seed}" : $"{name}-{Infrastructure.Seed}";
+        }
+
+        public void AddAccessPolicy(Parameter principalIdParameter)
+        {
+            _ = new KeyVaultAddAccessPolicy(this, principalIdParameter);
         }
     }
 }

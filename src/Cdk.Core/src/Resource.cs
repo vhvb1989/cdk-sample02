@@ -1,38 +1,31 @@
-﻿using Cdk.ResourceManager;
+﻿using Azure.Core;
 using Azure.Core.Serialization;
-using Azure.ResourceManager.Models;
+using Cdk.ResourceManager;
+using System.Security.Cryptography;
 using System.Text;
 
 namespace Cdk.Core
 {
     public abstract class Resource : IModelSerializable<Resource>
     {
-        private class EmptyResourceData : ResourceData { }
-
-        private class Subscription : Resource<EmptyResourceData>
-        {
-            public override string Name => "subscription";
-
-            public Subscription(Resource? scope, string version, EmptyResourceData properties)
-                : base(scope, version, properties)
-            {
-            }
-        }
-
-        public static readonly Resource SubscriptionScope = new Subscription(null, string.Empty, new EmptyResourceData());
-
         protected internal Dictionary<string, string> ParameterOverrides { get; }
         public IList<Parameter> Parameters { get; }
 
+        protected IList<Resource> ResourceReferences { get; }
+
         public IList<Output> Outputs { get; }
+        public IList<Resource> ModuleDependencies { get; }
 
         public IList<Resource> Resources { get; }
         public Resource? Scope { get; }
-        public ResourceData Properties { get; }
+        public object Properties { get; }
         public string Version { get; }
-        public abstract string Name { get; }
+        public string Name { get; }
 
-        protected Resource(Resource? scope, string version, ResourceData properties)
+        private ResourceType ResourceType { get; }
+        public ResourceIdentifier Id { get; }
+
+        protected Resource(Resource? scope, string resourceName, ResourceType resourceType, string version, object properties)
         {
             Resources = new List<Resource>();
             Scope = scope;
@@ -42,15 +35,25 @@ namespace Cdk.Core
             ParameterOverrides = new Dictionary<string, string>();
             Parameters = new List<Parameter>();
             Outputs = new List<Output>();
+            ResourceReferences = new List<Resource>();
+            ModuleDependencies = new List<Resource>();
+            ResourceType = resourceType;
+            Id = scope is null ? ResourceIdentifier.Root : scope is ResourceGroup ? scope.Id.AppendProviderResource(ResourceType.Namespace, ResourceType.GetLastType(), resourceName) : scope.Id.AppendChildResource(ResourceType.GetLastType(), resourceName);
+            Name = GetHash();
+            Outputs.Add(new Output($"APP_{Name}_ID", Id!, true));
+            Outputs.Add(new Output($"APP_{Name}_NAME", resourceName, true));
         }
 
-        private bool IsChildResource => Scope is not null && Scope is not ResourceGroup && !Scope.Equals(SubscriptionScope);
+        private bool IsChildResource => Scope is not null && Scope is not ResourceGroup && Scope is not Subscription;
 
         public void AssignParameter(string propertyName, Parameter parameter)
         {
             ParameterOverrides.Add(propertyName.ToCamelCase(), parameter.Name);
             Parameters.Add(parameter);
         }
+
+        protected static AzureLocation GetLocation(AzureLocation? location = default) => location ?? Environment.GetEnvironmentVariable("AZURE_LOCATION") ?? AzureLocation.WestUS;
+
 
         public void AddOutput(string name, string propertyName)
         {
@@ -93,15 +96,17 @@ namespace Cdk.Core
         {
             using var stream = new MemoryStream();
             stream.Write(Encoding.UTF8.GetBytes($"module {Name} './resources/{Name}/{Name}.bicep' = {{{Environment.NewLine}"));
-            stream.Write(Encoding.UTF8.GetBytes($"  name: '{Properties.Name}'{Environment.NewLine}"));
+            stream.Write(Encoding.UTF8.GetBytes($"  name: '{Id.Name}'{Environment.NewLine}"));
             stream.Write(Encoding.UTF8.GetBytes($"  scope: {Scope!.Name}{Environment.NewLine}"));
-            var parametersToWrite = GetParams(this);
+            WriteDependencies(stream);
+            var parametersToWrite = new HashSet<Parameter>();
+            GetAllParametersRecursive(this, parametersToWrite, IsChildResource);
             if (parametersToWrite.Count() > 0)
             {
                 stream.Write(Encoding.UTF8.GetBytes($"  params: {{{Environment.NewLine}"));
-                foreach (var paramName in parametersToWrite)
+                foreach (var parameter in parametersToWrite)
                 {
-                    stream.Write(Encoding.UTF8.GetBytes($"    {paramName}: {paramName}{Environment.NewLine}"));
+                    stream.Write(Encoding.UTF8.GetBytes($"    {parameter.Name}: {parameter.Name}{Environment.NewLine}"));
                 }
                 stream.Write(Encoding.UTF8.GetBytes($"  }}{Environment.NewLine}"));
             }
@@ -110,14 +115,17 @@ namespace Cdk.Core
             return new BinaryData(stream.GetBuffer().AsMemory(0, (int)stream.Position));
         }
 
-        private static IEnumerable<string> GetParams(Resource resource)
+        private void WriteDependencies(MemoryStream stream)
         {
-            IEnumerable<string> parameters = resource.ParameterOverrides.Values;
-            foreach (var child in resource.Resources)
+            if (ModuleDependencies.Count == 0)
+                return;
+
+            stream.Write(Encoding.UTF8.GetBytes($"  dependsOn: [{Environment.NewLine}"));
+            foreach (var dependency in ModuleDependencies)
             {
-                parameters = parameters.Concat(GetParams(child));
+                stream.Write(Encoding.UTF8.GetBytes($"    {dependency.Name}{Environment.NewLine}"));
             }
-            return parameters;
+            stream.Write(Encoding.UTF8.GetBytes($"  ]{Environment.NewLine}"));
         }
 
         private BinaryData SerializeModule(ModelSerializerOptions options)
@@ -127,42 +135,82 @@ namespace Cdk.Core
 
             WriteParameters(stream);
 
-            stream.Write(Encoding.UTF8.GetBytes($"resource {Name} '{Properties.ResourceType}@{Version}' = {{{Environment.NewLine}"));
+            stream.Write(Encoding.UTF8.GetBytes($"resource {Name} '{ResourceType}@{Version}' = {{{Environment.NewLine}"));
 
             if (IsChildResource)
-            {
                 stream.Write(Encoding.UTF8.GetBytes($"  parent: {Scope!.Name}{Environment.NewLine}"));
-            }
 
             WriteLines(0, ModelSerializer.Serialize(Properties, options), stream, this);
             stream.Write(Encoding.UTF8.GetBytes($"}}{Environment.NewLine}"));
 
             foreach (var resource in Resources)
             {
-                int depthToUse = resource is SubResource ? depth : 0;
                 stream.Write(Encoding.UTF8.GetBytes(Environment.NewLine));
-                WriteLines(depthToUse, ModelSerializer.Serialize(resource, options), stream, resource);
+                WriteLines(0, ModelSerializer.Serialize(resource, options), stream, resource);
             }
+
+            WriteResourceReferences(stream);
 
             WriteOutputs(stream);
 
             return new BinaryData(stream.GetBuffer().AsMemory(0, (int)stream.Position));
         }
 
-        private void WriteOutputs(MemoryStream stream)
+        private void WriteResourceReferences(MemoryStream stream)
+        {
+            if (ResourceReferences.Count == 0)
+                return;
+
+            stream.Write(Encoding.UTF8.GetBytes(Environment.NewLine));
+            foreach (var resourceReference in ResourceReferences)
+            {
+                stream.Write(Encoding.UTF8.GetBytes($"{Environment.NewLine}"));
+                stream.Write(Encoding.UTF8.GetBytes($"resource {resourceReference.Name} '{resourceReference.ResourceType}@{resourceReference.Version}' existing = {{{Environment.NewLine}"));
+                if (resourceReference.IsChildResource)
+                    stream.Write(Encoding.UTF8.GetBytes($"  parent: {resourceReference.Scope!.Name}{Environment.NewLine}"));
+                stream.Write(Encoding.UTF8.GetBytes($"  name: '{resourceReference.Id.Name}'{Environment.NewLine}"));
+                stream.Write(Encoding.UTF8.GetBytes($"}}"));
+            }
+        }
+
+        internal void WriteOutputs(MemoryStream stream)
         {
             if (Outputs.Count > 0)
                 stream.Write(Encoding.UTF8.GetBytes(Environment.NewLine));
 
-            foreach(var output in Outputs)
+            var outputsToWrite = new HashSet<Output>();
+            GetAllOutputsRecursive(this, outputsToWrite, IsChildResource);
+            foreach (var output in outputsToWrite)
             {
-                stream.Write(Encoding.UTF8.GetBytes($"output {output.Name} string = {output.Value}{Environment.NewLine}"));
+                string value = output.IsLiteral ? $"'{output.Value}'" : output.Value;
+                string name = IsChildResource ? $"{Name}_{output.Name}" : output.Name;
+                stream.Write(Encoding.UTF8.GetBytes($"output {name} string = {value}{Environment.NewLine}"));
+            }
+        }
+
+        private void GetAllOutputsRecursive(Resource resource, HashSet<Output> visited, bool isChild)
+        {
+            if (!isChild)
+            {
+                foreach (var output in resource.Outputs)
+                {
+                    if (!visited.Contains(output))
+                    {
+                        visited.Add(output);
+                    }
+                }
+                foreach (var child in resource.Resources)
+                {
+                    GetAllOutputsRecursive(child, visited, isChild);
+                }
             }
         }
 
         protected void WriteParameters(MemoryStream stream)
         {
-            foreach (var parameter in Parameters)
+            var parametersToWrite = new HashSet<Parameter>();
+            GetAllParametersRecursive(this, parametersToWrite, IsChildResource);
+            foreach (var parameter in parametersToWrite)
             {
                 string defaultValue = parameter.DefaultValue is null ? string.Empty : $" = '{parameter.DefaultValue}'";
 
@@ -171,6 +219,24 @@ namespace Cdk.Core
 
                 stream.Write(Encoding.UTF8.GetBytes($"@description('{parameter.Description}'){Environment.NewLine}"));
                 stream.Write(Encoding.UTF8.GetBytes($"param {parameter.Name} string{defaultValue}{Environment.NewLine}{Environment.NewLine}"));
+            }
+        }
+
+        private void GetAllParametersRecursive(Resource resource, HashSet<Parameter> visited, bool isChild)
+        {
+            if (!isChild)
+            {
+                foreach (var parameter in resource.Parameters)
+                {
+                    if (!visited.Contains(parameter))
+                    {
+                        visited.Add(parameter);
+                    }
+                }
+                foreach (var child in resource.Resources)
+                {
+                    GetAllParametersRecursive(child, visited, isChild);
+                }
             }
         }
 
@@ -217,6 +283,39 @@ namespace Cdk.Core
         Resource IModelSerializable<Resource>.Deserialize(BinaryData data, ModelSerializerOptions options)
         {
             throw new NotImplementedException();
+        }
+
+        internal string GetHash()
+        {
+            string fullScope = $"{GetScopedName(this, Id.Name)}";
+            using (SHA256 sha256 = SHA256.Create())
+            {
+                byte[] hashBytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(fullScope));
+
+                // Convert the hash bytes to a base64 string and take the first 8 characters
+                string base64Hash = Convert.ToBase64String(hashBytes);
+                return $"{GetType().Name.ToCamelCase()}_{GetAlphaNumeric(base64Hash, 8)}";
+            }
+        }
+
+        private string GetAlphaNumeric(string base64Hash, int chars)
+        {
+            StringBuilder sb = new StringBuilder();
+            int index = 0;
+            while (sb.Length <= chars && index < base64Hash.Length)
+            {
+                if (char.IsLetterOrDigit(base64Hash[index]))
+                    sb.Append(base64Hash[index]);
+                index++;
+            }
+            return sb.ToString();
+        }
+
+        private static string GetScopedName(Resource resource, string scopedName)
+        {
+            Resource? parent = resource.Scope;
+
+            return parent is null || parent is Tenant ? scopedName : GetScopedName(parent, $"{parent.Id.Name}_{scopedName}");
         }
     }
 }

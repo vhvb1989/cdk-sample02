@@ -7,13 +7,13 @@ namespace Cdk.Sql
 {
     public class SqlServer : Resource<SqlServerData>
     {
-        public override string Name { get; } = $"sql{Infrastructure.Seed}";
+        private const string ResourceTypeName = "Microsoft.Sql/servers";
 
         public SqlServer(Resource? scope, string name, string? version = default, AzureLocation? location = default)
-            : base(scope, version ?? "2022-08-01-preview", ArmSqlModelFactory.SqlServerData(
-                name: name is null ? $"sql-{Infrastructure.Seed}" : $"{name}-{Infrastructure.Seed}",
-                location: location ?? Environment.GetEnvironmentVariable("AZURE_LOCATION") ?? AzureLocation.WestUS,
-                resourceType: "Microsoft.Sql/servers",
+            : base(scope, GetName(name), ResourceTypeName, version ?? "2022-08-01-preview", ArmSqlModelFactory.SqlServerData(
+                name: GetName(name),
+                location: GetLocation(location),
+                resourceType: ResourceTypeName,
                 version: "12.0",
                 minimalTlsVersion: "1.2",
                 publicNetworkAccess: ServerNetworkAccessFlag.Enabled,
@@ -21,5 +21,7 @@ namespace Cdk.Sql
                 administratorLoginPassword: Guid.Empty.ToString()))
         {
         }
+
+        private static string GetName(string? name) => name is null ? $"sql-{Infrastructure.Seed}" : $"{name}-{Infrastructure.Seed}";
     }
 }
