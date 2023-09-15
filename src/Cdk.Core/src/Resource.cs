@@ -11,7 +11,7 @@ namespace Cdk.Core
         protected internal Dictionary<string, string> ParameterOverrides { get; }
         public IList<Parameter> Parameters { get; }
 
-        protected IList<Resource> ResourceReferences { get; }
+        protected internal IList<Resource> ResourceReferences { get; }
 
         public IList<Output> Outputs { get; }
         public IList<Resource> ModuleDependencies { get; }

@@ -48,6 +48,7 @@ new WebSiteConfigLogs(webApp, "webLogs");
 
 // api - api
 var apiApp = new WebSite(resourceGroup, "api", appServicePlan, Runtime.Dotnetcore, "6.0");
+
 apiApp.Properties.Tags.Add("azd-service-name","api");
 new WebSiteConfigLogs(apiApp, "apiLogs");
 

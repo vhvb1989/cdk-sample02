@@ -57,6 +57,7 @@ namespace Cdk.Resources
                         ./sqlcmd -S ${DBSERVER} -d ${DBNAME} -U ${SQLADMIN} -i ./initDb.sql
                         """))
         {
+            ModuleDependencies.Add(database.Scope!);
             ResourceReferences.Add(database);
             ResourceReferences.Add(database.Scope!);
             Parameters.Add(appUserPasswordSecret);
