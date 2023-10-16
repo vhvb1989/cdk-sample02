@@ -9,7 +9,6 @@
             "nodeGypDependencies": false
         },
         "ghcr.io/vhvb1989/azure-dev/azd:latest": {},
-        "ghcr.io/vhvb1989/azure-dev/azd-persistence:0": {}
     },
     "customizations": {
         "vscode": {
